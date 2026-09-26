@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111214">
+  <title>Xiaomi Scooter 6 — Read-only MiOT Probe v0.8</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    body { margin:0; background:#111214; color:#f5f5f7; }
+    main { max-width:780px; margin:0 auto; padding:28px 18px 48px; }
+    .card { background:#1b1c20; border:1px solid #303138; border-radius:20px; padding:18px; margin:14px 0; }
+    .warning { border-color:#6d5320; background:#221c12; }
+    h1 { font-size:28px; margin:0 0 8px; }
+    p { color:#b8bbc3; line-height:1.45; }
+    button {
+      width:100%; min-height:52px; border:0; border-radius:14px;
+      font-size:17px; font-weight:700; margin-top:10px;
+    }
+    #run { background:#f2f2f2; color:#111; }
+    #disconnect, #clearlog { background:#2a2b31; color:#fff; }
+    input {
+      width:100%; box-sizing:border-box; margin-top:8px; padding:14px;
+      border-radius:12px; border:1px solid #41434b; background:#111214; color:#f5f5f7;
+      font:15px ui-monospace,SFMono-Regular,Menlo,monospace;
+    }
+    .k { color:#9da0a8; font-size:13px; text-transform:uppercase; letter-spacing:.08em; margin-top:14px; }
+    .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; margin-top:6px; }
+    #status { font-weight:700; }
+    .ok { color:#6ee7a8; }
+    .warn { color:#ffd36e; }
+    .err { color:#ff8585; }
+    pre { white-space:pre-wrap; word-break:break-word; font-size:13px; color:#d5d7dd; margin:0; }
+    .pill {
+      display:inline-block; padding:5px 9px; border-radius:999px; margin:3px 4px 3px 0;
+      background:#27282e; color:#d7d9df; font:12px ui-monospace,SFMono-Regular,Menlo,monospace;
+    }
+    .small { color:#9da0a8; font-size:13px; line-height:1.4; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Xiaomi Scooter 6 — Read-only MiOT Probe v0.8</h1>
+
+  <div class="card warning">
+    <b>Что делает v0.8</b>
+    <p>
+      Проходит подтверждённую BLE-аутентификацию, затем поднимает application/SPEC канал
+      <b>001A/001B</b> и выполняет ровно один <b>read-only MIoT GET</b>:
+      <b>BATTERY_LEVEL (SIID 3, PIID 1)</b>.
+    </p>
+    <p>
+      <b>SET-команды и настройки не отправляются.</b> 0017/0018/001C не используются.
+      001A/001B используются только для одного GET батареи. LTMK и session keys не выводятся в лог
+      и страница не делает сетевых запросов после загрузки.
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="k">LTMK / Scooter Link export code</div>
+    <input id="secret" type="password" autocomplete="off" autocapitalize="off"
+      placeholder="64 hex символа или scooterre-export-v1:..." />
+    <input id="manifestFile" type="file" accept=".json,application/json" />
+    <div class="small" id="manifestState" style="margin-top:8px;">Или выбери manifest.json из Scooter Link.</div>
+    <div class="small" style="margin-top:8px;">
+      Не отправляй LTMK в чат. Вставляй его только сюда. Поддерживается и код Export из Scooter Link.
+    </div>
+
+    <div class="k">Статус</div>
+    <div id="status">Готов</div>
+    <button id="run">Connect, Authenticate & Read Battery</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <button id="clearlog">Clear log</button>
+  </div>
+
+  <div class="card">
+    <div class="k">Устройство</div>
+    <div id="device" class="v">—</div>
+
+    <div class="k">0004</div>
+    <div id="version" class="v">—</div>
+
+    <div class="k">Источник ключа</div>
+    <div id="keySource" class="v">—</div>
+
+    <div class="k">Этапы</div>
+    <div>
+      <span id="s_boot" class="pill">bootstrap: —</span>
+      <span id="s_session" class="pill">sessionStart: —</span>
+      <span id="s_keygen" class="pill">P-256 local: —</span>
+      <span id="s_pub" class="pill">public-key exchange: —</span>
+      <span id="s_ecdh" class="pill">ECDH: —</span>
+      <span id="s_hkdf" class="pill">HKDF: —</span>
+      <span id="s_ccm" class="pill">CCM confirm: —</span>
+      <span id="s_confirm" class="pill">confirm TX: —</span>
+      <span id="s_auth" class="pill">AUTH: —</span>
+      <span id="s_specsub" class="pill">001A/001B notify: —</span>
+      <span id="s_get" class="pill">MIoT GET 3.1: —</span>
+      <span id="s_specdec" class="pill">SPEC decrypt: —</span>
+    </div>
+
+    <div class="k">BATTERY_LEVEL (3.1)</div>
+    <div id="batteryValue" class="v">—</div>
+
+    <div class="k">Decrypted SPEC reply</div>
+    <div id="specPlain" class="v">—</div>
+
+    <div class="k">Последний 001A</div>
+    <div id="last1A" class="v">—</div>
+
+    <div class="k">Последний 001B</div>
+    <div id="last1B" class="v">—</div>
+
+    <div class="k">Последний 0010</div>
+    <div id="last10" class="v">—</div>
+
+    <div class="k">Последний 0016</div>
+    <div id="last16" class="v">—</div>
+  </div>
+
+  <div class="card">
+    <div class="k">Лог</div>
+    <pre id="log">Ожидание…</pre>
+  </div>
+</main>
+
+<script>
+(() => {
+  const SERVICE = '0000fe95-0000-1000-8000-00805f9b34fb';
+  const UUID4   = '00000004-0000-1000-8000-00805f9b34fb';
+  const UUID10  = '00000010-0000-1000-8000-00805f9b34fb';
+  const UUID16  = '00000016-0000-1000-8000-00805f9b34fb';
+  const UUID1A  = '0000001a-0000-1000-8000-00805f9b34fb';
+  const UUID1B  = '0000001b-0000-1000-8000-00805f9b34fb';
+
+  const BOOTSTRAP_START = new Uint8Array([0xA4]);
+  const SESSION_START = new Uint8Array([0x20,0x00,0x00,0x00]);
+  const PUBKEY_FLOW = new Uint8Array([0x00,0x00,0x00,0x03,0x01,0x00]);
+  const CONFIRM_FLOW = new Uint8Array([0x00,0x00,0x00,0x05,0x01,0x00]);
+  const SINGLE_CONTROL_ACK = new Uint8Array([0x00,0x00,0x03,0x00]);
+
+  const HKDF_SALT = new TextEncoder().encode('smartcfg-login-salt');
+  const HKDF_INFO = new TextEncoder().encode('smartcfg-login-info');
+  const CONFIRM_NONCE = new Uint8Array([0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B]);
+
+  let device = null, server = null, service = null, ch10 = null, ch16 = null, ch1A = null, ch1B = null;
+  let subscribed10 = false, subscribed16 = false, subscribed1A = false, subscribed1B = false, bootstrapDone = false;
+  let keyPair = null, localPublic64 = null, peerPublic64 = null;
+  let ltmk = null, sessionKey = null, confirmation = null;
+  let manifestLoaded = null;
+  let phase = 'BOOTSTRAP';
+  let writeQueue = Promise.resolve();
+  let authTimer = null;
+
+  // Read-only SPEC probe state.
+  let appCounter = 0;
+  let specPhase = 'IDLE';
+  let specRespFc = null;
+  let specRespFrames = new Map();
+  let specTimeout = null;
+  let specRequestPayload = null;
+
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  function log(msg) {
+    const now = new Date().toLocaleTimeString();
+    const el = $('log');
+    if (el.textContent === 'Ожидание…') el.textContent = '';
+    el.textContent += `\n[${now}] ${msg}`;
+  }
+
+  function setStatus(msg, cls='') {
+    $('status').textContent = msg;
+    $('status').className = cls;
+  }
+
+  function mark(id, text, cls='ok') {
+    const el = $(id);
+    el.textContent = text;
+    el.className = `pill ${cls}`;
+  }
+
+  function toHex(bytes) {
+    return [...bytes].map(b => b.toString(16).padStart(2,'0')).join(' ').toUpperCase();
+  }
+
+  function fromHex(hex) {
+    if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2) throw new Error('Некорректный HEX');
+    return new Uint8Array(hex.match(/../g).map(x => parseInt(x,16)));
+  }
+
+  function parseLtmkInput(text) {
+    const raw = text.trim();
+    if (!raw) throw new Error('Вставь LTMK или Scooter Link export code');
+
+    if (raw.startsWith('scooterre-export-v1:')) {
+      const b64 = raw.slice('scooterre-export-v1:'.length);
+      let bin;
+      try { bin = atob(b64); } catch (_) { throw new Error('Некорректный Scooter Link export code'); }
+      const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+      let obj;
+      try { obj = JSON.parse(new TextDecoder().decode(bytes)); }
+      catch (_) { throw new Error('Export code не содержит корректный JSON'); }
+
+      const hex = String(obj.ltmk || '');
+      if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error('В export code нет 32-байтового LTMK');
+      return {
+        key: fromHex(hex),
+        source: `Scooter Link export${obj.model ? ' | ' + obj.model : ''}${obj.name ? ' | ' + obj.name : ''}`
+      };
+    }
+
+    const hex = raw.replace(/[\s:-]/g,'');
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+      throw new Error('LTMK должен содержать ровно 32 байта = 64 HEX символа');
+    }
+    return { key: fromHex(hex), source:'raw 32-byte LTMK' };
+  }
+
+  function concat(...arrays) {
+    const total = arrays.reduce((n,a)=>n+a.length,0);
+    const out = new Uint8Array(total);
+    let o = 0;
+    for (const a of arrays) { out.set(a,o); o += a.length; }
+    return out;
+  }
+
+  function xor(a,b) {
+    if (a.length !== b.length) throw new Error('XOR length mismatch');
+    return new Uint8Array(a.length).map((_,i)=>a[i]^b[i]);
+  }
+
+  function encodeLength(value, width) {
+    const out = new Uint8Array(width);
+    for (let i=0;i<width;i++) out[width-1-i] = (value >>> (i*8)) & 0xff;
+    return out;
+  }
+
+  async function hmacSha256(keyBytes, data) {
+    const key = await crypto.subtle.importKey(
+      'raw', keyBytes, {name:'HMAC', hash:'SHA-256'}, false, ['sign']
+    );
+    return new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
+  }
+
+  async function hkdfSha256(ikm, salt, info, length) {
+    const prk = await hmacSha256(salt, ikm);
+    let previous = new Uint8Array(0);
+    const chunks = [];
+    let written = 0;
+    let counter = 1;
+
+    while (written < length) {
+      const input = concat(previous, info, new Uint8Array([counter]));
+      previous = await hmacSha256(prk, input);
+      chunks.push(previous);
+      written += previous.length;
+      counter++;
+    }
+    return concat(...chunks).slice(0,length);
+  }
+
+  // WebCrypto has no portable AES-CCM in WebKit. For one AES block we use the first
+  // CBC block with IV=0, which equals AES-ECB(block). Any padding block is ignored.
+  async function aesBlock(key16, block16) {
+    if (key16.length !== 16 || block16.length !== 16) throw new Error('AES block/key length error');
+    const key = await crypto.subtle.importKey('raw', key16, {name:'AES-CBC'}, false, ['encrypt']);
+    const enc = new Uint8Array(await crypto.subtle.encrypt(
+      {name:'AES-CBC', iv:new Uint8Array(16)}, key, block16
+    ));
+    return enc.slice(0,16);
+  }
+
+  async function ccmMac(key16, nonce, plaintext, tagLength) {
+    const q = 15 - nonce.length;
+    const flags = (((tagLength - 2) / 2) << 3) | (q - 1);
+    const b0 = concat(new Uint8Array([flags]), nonce, encodeLength(plaintext.length, q));
+    let state = await aesBlock(key16, b0);
+
+    for (let off=0; off<plaintext.length; off+=16) {
+      const block = new Uint8Array(16);
+      block.set(plaintext.slice(off, off+16));
+      state = await aesBlock(key16, xor(state, block));
+    }
+    return state;
+  }
+
+  async function ccmCounterBlock(key16, nonce, counter) {
+    const q = 15 - nonce.length;
+    const flags = q - 1;
+    return await aesBlock(
+      key16,
+      concat(new Uint8Array([flags]), nonce, encodeLength(counter, q))
+    );
+  }
+
+  async function aesCcmEncrypt(key16, nonce, plaintext, tagLength=4) {
+    const mac = await ccmMac(key16, nonce, plaintext, tagLength);
+    const s0 = await ccmCounterBlock(key16, nonce, 0);
+
+    const ciphertext = new Uint8Array(plaintext.length);
+    let off = 0, counter = 1;
+    while (off < plaintext.length) {
+      const stream = await ccmCounterBlock(key16, nonce, counter++);
+      const n = Math.min(16, plaintext.length-off);
+      for (let i=0;i<n;i++) ciphertext[off+i] = plaintext[off+i] ^ stream[i];
+      off += n;
+    }
+
+    const tag = new Uint8Array(tagLength);
+    for (let i=0;i<tagLength;i++) tag[i] = mac[i] ^ s0[i];
+    return concat(ciphertext, tag);
+  }
+
+
+  async function aesCcmDecrypt(key16, nonce, ciphertextAndTag, tagLength=4) {
+    if (ciphertextAndTag.length < tagLength) throw new Error('CCM ciphertext shorter than tag');
+    const ciphertext = ciphertextAndTag.slice(0, ciphertextAndTag.length - tagLength);
+    const receivedTag = ciphertextAndTag.slice(ciphertextAndTag.length - tagLength);
+
+    const plaintext = new Uint8Array(ciphertext.length);
+    let off = 0, counter = 1;
+    while (off < ciphertext.length) {
+      const stream = await ccmCounterBlock(key16, nonce, counter++);
+      const n = Math.min(16, ciphertext.length-off);
+      for (let i=0;i<n;i++) plaintext[off+i] = ciphertext[off+i] ^ stream[i];
+      off += n;
+    }
+
+    const mac = await ccmMac(key16, nonce, plaintext, tagLength);
+    const s0 = await ccmCounterBlock(key16, nonce, 0);
+    const expectedTag = new Uint8Array(tagLength);
+    for (let i=0;i<tagLength;i++) expectedTag[i] = mac[i] ^ s0[i];
+
+    let diff = 0;
+    for (let i=0;i<tagLength;i++) diff |= expectedTag[i] ^ receivedTag[i];
+    if (diff !== 0) throw new Error('CCM authentication failed');
+    return plaintext;
+  }
+
+  function counterBytes(counter) {
+    const c = counter >>> 0;
+    const low = c & 0xFFFF;
+    const high = (c >>> 16) & 0xFFFF;
+    return new Uint8Array([
+      low & 0xFF, (low >>> 8) & 0xFF,
+      high & 0xFF, (high >>> 8) & 0xFF
+    ]);
+  }
+
+  function buildGetFrame(siid, piid, tid=1) {
+    const total = 11; // 6-byte header + 5-byte GET element
+    const lenFlag = (total | 0x2000) & 0xFFFF;
+    return new Uint8Array([
+      lenFlag & 0xFF, (lenFlag >>> 8) & 0xFF,
+      tid & 0xFF, (tid >>> 8) & 0xFF,
+      0x02, 0x01,                  // op=GET, count=1
+      siid & 0xFF,
+      piid & 0xFF, (piid >>> 8) & 0xFF,
+      0x00, 0x00
+    ]);
+  }
+
+  async function encryptSpecFrame(counter, frame) {
+    const appKey = sessionKey.slice(16,32);
+    const appIv = sessionKey.slice(36,40);
+    const nonce = concat(appIv, new Uint8Array(4), counterBytes(counter));
+    const ct = await aesCcmEncrypt(appKey, nonce, frame, 4);
+    return concat(new Uint8Array([counter & 0xFF, (counter >>> 8) & 0xFF]), ct);
+  }
+
+  async function decryptSpecFrame(payload) {
+    if (payload.length < 7) throw new Error('SPEC payload too short');
+    const counter = payload[0] | (payload[1] << 8);
+    const devKey = sessionKey.slice(0,16);
+    const devIv = sessionKey.slice(32,36);
+    const nonce = concat(devIv, new Uint8Array(4), counterBytes(counter));
+    return await aesCcmDecrypt(devKey, nonce, payload.slice(2), 4);
+  }
+
+  function parseBatteryReply(pt) {
+    if (pt.length < 11) throw new Error(`SPEC reply too short (${pt.length}B)`);
+    const status = pt[9] | (pt[10] << 8);
+    if (status !== 0) {
+      return { ok:false, status, value:null, raw:new Uint8Array(0) };
+    }
+    if (pt.length < 13) throw new Error('SPEC reply missing type/length');
+    const tl = pt[11] | (pt[12] << 8);
+    const vlen = tl & 0x0FFF;
+    if (pt.length < 13 + vlen) throw new Error(`SPEC value truncated: need ${vlen}B`);
+    const raw = pt.slice(13, 13+vlen);
+    const value = raw.length ? raw[0] : null; // BATTERY_LEVEL is UINT8
+    return { ok:true, status:0, value, raw };
+  }
+
+  function crc32LE(input) {
+    let crc = 0xffffffff;
+    for (const b of input) {
+      crc ^= b;
+      for (let i=0;i<8;i++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+    crc = (crc ^ 0xffffffff) >>> 0;
+    return new Uint8Array([
+      crc & 0xff,
+      (crc >>> 8) & 0xff,
+      (crc >>> 16) & 0xff,
+      (crc >>> 24) & 0xff
+    ]);
+  }
+
+  async function writeNoResponse(ch, bytes, label, logBytes=true) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    log(`TX ${label}${logBytes ? ': ' + toHex(data) : ` (${data.length}B)`}`);
+
+    if (typeof ch.writeValueWithoutResponse === 'function') {
+      await ch.writeValueWithoutResponse(data);
+      return;
+    }
+    if (typeof ch.writeValue === 'function') {
+      await ch.writeValue(data);
+      return;
+    }
+    throw new Error(`Нет BLE write API (${label})`);
+  }
+
+  function queueWrite(task) {
+    writeQueue = writeQueue.then(task).catch(err => {
+      setStatus('Ошибка', 'err');
+      log(`ERROR: ${err.name || 'Error'}: ${err.message || err}`);
+      mark('s_auth', 'AUTH: ERROR', 'err');
+    });
+    return writeQueue;
+  }
+
+  async function generateEphemeralKey() {
+    keyPair = await crypto.subtle.generateKey(
+      {name:'ECDH', namedCurve:'P-256'}, true, ['deriveBits']
+    );
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+    if (raw.length !== 65 || raw[0] !== 0x04) throw new Error('Unexpected P-256 public key encoding');
+    localPublic64 = raw.slice(1);
+    mark('s_keygen','P-256 local: OK');
+    log('Local ephemeral P-256 key generated');
+  }
+
+  async function deriveSecretAndConfirmation(peer64) {
+    const sec1 = new Uint8Array(65);
+    sec1[0] = 0x04;
+    sec1.set(peer64,1);
+
+    const peerKey = await crypto.subtle.importKey(
+      'raw', sec1, {name:'ECDH', namedCurve:'P-256'}, false, []
+    );
+    const shared = new Uint8Array(await crypto.subtle.deriveBits(
+      {name:'ECDH', public:peerKey}, keyPair.privateKey, 256
+    ));
+    if (shared.length !== 32) throw new Error(`ECDH secret ${shared.length}B, expected 32B`);
+    mark('s_ecdh','ECDH: 32B OK');
+    log('ECDH OK; shared secret not logged');
+
+    const ikm = concat(shared, ltmk);
+    sessionKey = await hkdfSha256(ikm, HKDF_SALT, HKDF_INFO, 64);
+    if (sessionKey.length !== 64) throw new Error('HKDF output length error');
+    mark('s_hkdf','HKDF: 64B OK');
+    log('HKDF-SHA256 OK; session key not logged');
+
+    const crc = crc32LE(peer64);
+    confirmation = await aesCcmEncrypt(sessionKey.slice(16,32), CONFIRM_NONCE, crc, 4);
+    if (confirmation.length !== 8) throw new Error('CCM confirmation length error');
+    mark('s_ccm','CCM confirm: 8B OK');
+    log('AES-CCM login confirmation built; bytes not logged');
+  }
+
+  async function subscribe16() {
+    if (subscribed16) return;
+    ch16.addEventListener('characteristicvaluechanged', on16);
+    await ch16.startNotifications();
+    subscribed16 = true;
+    log('0016 NOTIFY enabled');
+  }
+
+  async function subscribe10() {
+    if (subscribed10) return;
+    ch10.addEventListener('characteristicvaluechanged', on10);
+    await ch10.startNotifications();
+    subscribed10 = true;
+    log('0010 NOTIFY enabled');
+  }
+
+  function isA4(bytes) {
+    return bytes.length >= 4 && bytes[0]===0 && bytes[1]===0 && bytes[2]===4;
+  }
+
+  async function handleA4(bytes) {
+    const stage = bytes[3];
+    log(`A4 stage=${stage}, len=${bytes.length}`);
+
+    const ack = new Uint8Array(bytes);
+    ack[2] = 0x05;
+    await sleep(100);
+    await writeNoResponse(ch16, ack, `0016 A5 stage ${stage}`, false);
+
+    if (stage === 1 && !bootstrapDone) {
+      bootstrapDone = true;
+      mark('s_boot','bootstrap: OK');
+
+      await sleep(100);
+      await subscribe10();
+
+      await sleep(100);
+      await writeNoResponse(ch10, SESSION_START, '0010 sessionStart');
+      mark('s_session','sessionStart: TX');
+
+      await sleep(200);
+      await generateEphemeralKey();
+
+      phase = 'WAIT_PUB_CTRL_ACK';
+      await writeNoResponse(ch16, PUBKEY_FLOW, '0016 pubkey flowControl');
+      setStatus('Public-key exchange…', 'warn');
+    }
+  }
+
+  async function handleSecurity(bytes) {
+    if (bytes.length < 4) {
+      log(`0016 short frame: ${toHex(bytes)}`);
+      return;
+    }
+
+    const seq = bytes[0] | (bytes[1] << 8);
+    if (seq !== 0) {
+      log(`0016 data fragment seq=${seq}, len=${bytes.length-2}`);
+      return;
+    }
+
+    const kind = bytes[2];
+    const code = bytes[3];
+    const signed = code > 127 ? code - 256 : code;
+
+    if (kind === 0x01) {
+      log(`0016 ACK status=${signed}`);
+
+      if (phase === 'WAIT_PUB_CTRL_ACK') {
+        if (signed !== 1) throw new Error(`Pubkey control ACK=${signed}, expected 1`);
+
+        const frame = new Uint8Array(66);
+        frame[0]=1; frame[1]=0;
+        frame.set(localPublic64,2);
+
+        phase = 'WAIT_PUB_DATA_ACK';
+        await sleep(100);
+        await writeNoResponse(ch16, frame, '0016 local public key 64B', false);
+        return;
+      }
+
+      if (phase === 'WAIT_PUB_DATA_ACK') {
+        if (signed !== 0) throw new Error(`Pubkey data ACK=${signed}, expected 0`);
+        phase = 'WAIT_PEER_KEY';
+        return;
+      }
+
+      if (phase === 'WAIT_CONFIRM_CTRL_ACK') {
+        if (signed !== 1) throw new Error(`Confirm control ACK=${signed}, expected 1`);
+
+        const frame = new Uint8Array(2 + confirmation.length);
+        frame[0]=1; frame[1]=0;
+        frame.set(confirmation,2);
+
+        phase = 'WAIT_CONFIRM_DATA_ACK';
+        await sleep(100);
+        await writeNoResponse(ch16, frame, '0016 confirmation seq=1 8B', false);
+        mark('s_confirm','confirm TX: 8B');
+        return;
+      }
+
+      if (phase === 'WAIT_CONFIRM_DATA_ACK') {
+        if (signed !== 0) throw new Error(`Confirm data ACK=${signed}, expected 0`);
+
+        phase = 'WAIT_AUTH_STATUS';
+        mark('s_confirm','confirm TX: ACK OK');
+        setStatus('Confirmation accepted — ждём 0010…', 'warn');
+        log('Confirmation data ACK=0. Waiting for final CONTROL status.');
+
+        clearTimeout(authTimer);
+        authTimer = setTimeout(() => {
+          if (phase === 'WAIT_AUTH_STATUS') {
+            setStatus('Нет финального ответа 0010', 'err');
+            mark('s_auth','AUTH: timeout','err');
+            log('AUTH timeout: no final 0010 status within 5 s');
+          }
+        }, 5000);
+        return;
+      }
+
+      log(`ACK вне ожидаемой фазы ${phase}`);
+      return;
+    }
+
+    if (kind === 0x02 && code === 0x03) {
+      const payload = bytes.slice(4);
+      if (payload.length !== 64) throw new Error(`Peer public key ${payload.length}B, expected 64B`);
+
+      peerPublic64 = new Uint8Array(payload);
+      mark('s_pub','public-key exchange: RX OK');
+      log('Peer P-256 public key received (64B)');
+
+      await deriveSecretAndConfirmation(peerPublic64);
+
+      await sleep(100);
+      await writeNoResponse(ch16, SINGLE_CONTROL_ACK, '0016 peer single-control ACK');
+
+      await sleep(100);
+      phase = 'WAIT_CONFIRM_CTRL_ACK';
+      await writeNoResponse(ch16, CONFIRM_FLOW, '0016 confirmation flowControl type=5');
+      setStatus('Отправляем LTMK confirmation…', 'warn');
+      return;
+    }
+
+    log(`0016 other control kind=${kind} code=${code}`);
+  }
+
+  function on16(event) {
+    const dv = event.target.value;
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last16').textContent = toHex(bytes);
+    log(`RX 0016 len=${bytes.length}: ${bytes.length <= 20 ? toHex(bytes) : toHex(bytes.slice(0,20)) + ' ...'}`);
+
+    const copy = new Uint8Array(bytes);
+    queueWrite(async () => {
+      if (isA4(copy) && !bootstrapDone) await handleA4(copy);
+      else await handleSecurity(copy);
+    });
+  }
+
+
+  async function subscribeSpec() {
+    if (!ch1A) ch1A = await service.getCharacteristic(UUID1A);
+    if (!ch1B) ch1B = await service.getCharacteristic(UUID1B);
+
+    if (!subscribed1A) {
+      ch1A.addEventListener('characteristicvaluechanged', on1A);
+      await ch1A.startNotifications();
+      subscribed1A = true;
+      log('001A NOTIFY enabled');
+    }
+    if (!subscribed1B) {
+      ch1B.addEventListener('characteristicvaluechanged', on1B);
+      await ch1B.startNotifications();
+      subscribed1B = true;
+      log('001B NOTIFY enabled');
+    }
+    mark('s_specsub','001A/001B notify: ON');
+  }
+
+  async function startBatteryGet() {
+    if (phase !== 'AUTHENTICATED') throw new Error('SPEC GET requested before AUTH');
+    await subscribeSpec();
+
+    const frame = buildGetFrame(3, 1, 1);
+    const counter = appCounter++;
+    specRequestPayload = await encryptSpecFrame(counter, frame);
+
+    // Protocol.DEFAULT_FRAME_SIZE = 18; this first GET payload is 17B so exactly one DATA frame.
+    if (specRequestPayload.length > 18) {
+      throw new Error(`Unexpected first SPEC payload ${specRequestPayload.length}B > 18B`);
+    }
+
+    specRespFc = null;
+    specRespFrames = new Map();
+    specPhase = 'WAIT_WRITE_ACK_1';
+
+    const ctr = new Uint8Array([0x00,0x00,0x00,0x00,0x01,0x00]); // CTR, SPEC channel 0, 1 frame
+    await writeNoResponse(ch1A, ctr, '001A SPEC CTR GET(3.1)');
+    mark('s_get','MIoT GET 3.1: CTR TX');
+
+    clearTimeout(specTimeout);
+    specTimeout = setTimeout(() => {
+      if (!['DONE','ERROR'].includes(specPhase)) {
+        specPhase = 'ERROR';
+        mark('s_get','MIoT GET 3.1: timeout','err');
+        setStatus('AUTH OK, но MIoT GET timeout', 'err');
+        log('SPEC timeout: no complete 001A/001B exchange within 5 s');
+      }
+    }, 5000);
+  }
+
+  function on1A(event) {
+    const dv = event.target.value;
+    const b = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last1A').textContent = toHex(b);
+    log(`RX 001A: ${toHex(b)}`);
+
+    const copy = new Uint8Array(b);
+    queueWrite(async () => {
+      if (copy.length >= 4 && copy[0]===0 && copy[1]===0 && copy[2]===0x01) {
+        const st = copy[3];
+        log(`001A ACK status=${st}`);
+
+        if (st === 0x01 && specPhase === 'WAIT_WRITE_ACK_1') {
+          const data = concat(new Uint8Array([0x01,0x00]), specRequestPayload);
+          specPhase = 'WAIT_RESPONSE';
+          await sleep(30);
+          await writeNoResponse(ch1A, data, '001A SPEC DATA seq=1', false);
+          mark('s_get','MIoT GET 3.1: DATA TX');
+        }
+      }
+    });
+  }
+
+  function on1B(event) {
+    const dv = event.target.value;
+    const b = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last1B').textContent = toHex(b);
+    log(`RX 001B len=${b.length}: ${toHex(b)}`);
+
+    const copy = new Uint8Array(b);
+    queueWrite(async () => {
+      if (copy.length >= 3 && copy[0]===0 && copy[1]===0 && copy[2]===0x00) {
+        specRespFc = copy.length >= 6 ? (copy[4] | (copy[5] << 8)) : (copy[4] || 0);
+        log(`001B response CTR: frames=${specRespFc}`);
+        await writeNoResponse(ch1B, new Uint8Array([0,0,1,1]), '001B ACK start');
+        return;
+      }
+
+      if (copy.length >= 2) {
+        const seq = copy[0] | (copy[1] << 8);
+        if (seq >= 1 && seq <= 0xFFFF) {
+          specRespFrames.set(seq, copy.slice(2));
+          log(`001B response DATA seq=${seq}/${specRespFc ?? '?'}`);
+
+          if (specRespFc != null && specRespFrames.size >= specRespFc) {
+            await writeNoResponse(ch1B, new Uint8Array([0,0,1,0]), '001B ACK complete');
+
+            const seqs = [...specRespFrames.keys()].sort((a,b)=>a-b);
+            const assembled = concat(...seqs.map(s=>specRespFrames.get(s)));
+            const pt = await decryptSpecFrame(assembled);
+
+            $('specPlain').textContent = toHex(pt);
+            mark('s_specdec','SPEC decrypt: OK');
+            log(`SPEC plaintext: ${toHex(pt)}`);
+
+            const parsed = parseBatteryReply(pt);
+            clearTimeout(specTimeout);
+
+            if (!parsed.ok) {
+              specPhase = 'ERROR';
+              const hs = parsed.status.toString(16).padStart(4,'0').toUpperCase();
+              $('batteryValue').textContent = `GET failed, status=0x${hs}`;
+              mark('s_get',`MIoT GET 3.1: status 0x${hs}`,'err');
+              setStatus(`AUTH OK — GET 3.1 вернул 0x${hs}`, 'err');
+              log(`BATTERY_LEVEL GET failed with status=0x${hs}`);
+              return;
+            }
+
+            specPhase = 'DONE';
+            $('batteryValue').textContent = `${parsed.value}% | raw: ${toHex(parsed.raw)}`;
+            mark('s_get','MIoT GET 3.1: OK');
+            setStatus(`AUTH + MIoT GET OK — батарея ${parsed.value}%`, 'ok');
+            log(`BATTERY_LEVEL (3.1) = ${parsed.value}%`);
+          }
+        }
+      }
+    });
+  }
+
+  function on10(event) {
+    const dv = event.target.value;
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last10').textContent = toHex(bytes);
+    log(`RX 0010: ${toHex(bytes)}`);
+
+    if (phase === 'WAIT_AUTH_STATUS') {
+      clearTimeout(authTimer);
+
+      if (bytes.length === 4 &&
+          bytes[0]===0x21 && bytes[1]===0x00 &&
+          bytes[2]===0x00 && bytes[3]===0x00) {
+        phase = 'AUTHENTICATED';
+        mark('s_auth','AUTH: 21 00 00 00 OK');
+        setStatus('AUTH OK — запускаем read-only MIoT GET 3.1…', 'warn');
+        log('AUTH OK: scooter accepted the security session.');
+
+        // Let the auth GATT exchange settle, then perform exactly one read-only GET.
+        setTimeout(() => {
+          queueWrite(async () => {
+            await startBatteryGet();
+          });
+        }, 150);
+      } else {
+        phase = 'AUTH_REJECTED';
+        mark('s_auth',`AUTH: rejected ${toHex(bytes)}`,'err');
+        setStatus('AUTH отклонён', 'err');
+        log('AUTH rejected. Обычно это означает неверный LTMK/PIN либо отличие протокола.');
+      }
+    }
+  }
+
+  async function read0004() {
+    const ch4 = await service.getCharacteristic(UUID4);
+    const dv = await ch4.readValue();
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    const ascii = new TextDecoder().decode(bytes).replace(/\0/g,'');
+    $('version').textContent = `${ascii} | ${toHex(bytes)}`;
+    log(`0004 READ: ${ascii}`);
+  }
+
+  async function disconnectAll() {
+    clearTimeout(authTimer);
+    try { if (ch16 && subscribed16) await ch16.stopNotifications(); } catch (_) {}
+    try { if (ch10 && subscribed10) await ch10.stopNotifications(); } catch (_) {}
+    try { if (ch1A && subscribed1A) await ch1A.stopNotifications(); } catch (_) {}
+    try { if (ch1B && subscribed1B) await ch1B.stopNotifications(); } catch (_) {}
+    try { ch16?.removeEventListener('characteristicvaluechanged', on16); } catch (_) {}
+    try { ch10?.removeEventListener('characteristicvaluechanged', on10); } catch (_) {}
+    try { ch1A?.removeEventListener('characteristicvaluechanged', on1A); } catch (_) {}
+    try { ch1B?.removeEventListener('characteristicvaluechanged', on1B); } catch (_) {}
+
+    clearTimeout(specTimeout);
+    subscribed10=false; subscribed16=false; subscribed1A=false; subscribed1B=false; bootstrapDone=false;
+    keyPair=null; localPublic64=null; peerPublic64=null;
+    ltmk=null; sessionKey=null; confirmation=null;
+    phase='BOOTSTRAP'; writeQueue=Promise.resolve();
+    appCounter=0; specPhase='IDLE'; specRespFc=null; specRespFrames=new Map(); specRequestPayload=null;
+
+    try { if (device?.gatt?.connected) device.gatt.disconnect(); } catch (_) {}
+  }
+
+  function onDisconnected() {
+    setStatus('Отключено');
+    $('disconnect').disabled=true;
+    $('run').disabled=false;
+    log('GATT отключён');
+  }
+
+
+  async function loadManifestFile(file) {
+    const text = await file.text();
+    let obj;
+    try { obj = JSON.parse(text); }
+    catch (_) { throw new Error('manifest.json содержит некорректный JSON'); }
+
+    if (obj.format !== 'scooterre-bundle-v2') {
+      throw new Error(`Неожиданный format: ${obj.format || '(нет)'}`);
+    }
+    const hex = String(obj.ltmk || '');
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+      throw new Error('В manifest.json нет корректного 32-байтового LTMK');
+    }
+
+    manifestLoaded = {
+      key: fromHex(hex),
+      source: `manifest.json${obj.model ? ' | ' + obj.model : ''}${obj.name ? ' | ' + obj.name : ''}`,
+      mac: obj.mac || null
+    };
+
+    $('keySource').textContent = manifestLoaded.source;
+    $('manifestState').textContent =
+      `Загружен локально${obj.mac ? ' | ' + obj.mac : ''}${obj.model ? ' | ' + obj.model : ''}`;
+    $('manifestState').className = 'small ok';
+    log(`manifest.json loaded locally${obj.model ? ' | model=' + obj.model : ''}${obj.mac ? ' | MAC=' + obj.mac : ''}; LTMK bytes are not logged`);
+  }
+
+  $('manifestFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await loadManifestFile(file);
+      setStatus('manifest.json загружен — можно подключаться', 'ok');
+    } catch (err) {
+      manifestLoaded = null;
+      $('manifestState').textContent = err.message || String(err);
+      $('manifestState').className = 'small err';
+      setStatus('Ошибка manifest.json', 'err');
+    }
+  });
+
+  $('run').addEventListener('click', async () => {
+    if (!navigator.bluetooth) {
+      setStatus('Web Bluetooth недоступен','err');
+      return;
+    }
+    if (!crypto?.subtle) {
+      setStatus('WebCrypto недоступен','err');
+      return;
+    }
+
+    try {
+      let parsed;
+      if (manifestLoaded) {
+        parsed = { key: manifestLoaded.key, source: manifestLoaded.source };
+      } else {
+        parsed = parseLtmkInput($('secret').value);
+      }
+      ltmk = parsed.key;
+      $('keySource').textContent = parsed.source;
+      $('secret').value = ''; // secret stays only in memory after this point
+      log(`LTMK loaded from ${parsed.source}; key bytes are not logged`);
+
+      await disconnectAll();
+      // disconnectAll clears ltmk, so restore parsed key after clean reset.
+      ltmk = parsed.key;
+
+      for (const id of ['s_boot','s_session','s_keygen','s_pub','s_ecdh','s_hkdf','s_ccm','s_confirm','s_auth','s_specsub','s_get','s_specdec']) {
+        $(id).className='pill';
+      }
+      $('last10').textContent='—';
+      $('last16').textContent='—';
+      $('last1A').textContent='—';
+      $('last1B').textContent='—';
+      $('batteryValue').textContent='—';
+      $('specPlain').textContent='—';
+
+      setStatus('Выбор устройства…','warn');
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices:true,
+        optionalServices:[SERVICE]
+      });
+
+      $('device').textContent=device.name || '(без имени)';
+      log(`Выбрано: ${device.name || '(без имени)'}`);
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+
+      setStatus('GATT connect…','warn');
+      server = await device.gatt.connect();
+      log('GATT подключён');
+
+      service = await server.getPrimaryService(SERVICE);
+      ch10 = await service.getCharacteristic(UUID10);
+      ch16 = await service.getCharacteristic(UUID16);
+      log('FE95 / 0010 / 0016 найдены');
+
+      await subscribe16();
+      await read0004();
+
+      await sleep(100);
+      await writeNoResponse(ch10, BOOTSTRAP_START, '0010 bootstrapStart A4');
+
+      $('disconnect').disabled=false;
+      $('run').disabled=true;
+      setStatus('Bootstrap…','warn');
+
+    } catch (e) {
+      setStatus('Ошибка','err');
+      log(`${e.name || 'Error'}: ${e.message || e}`);
+    }
+  });
+
+  $('disconnect').addEventListener('click', disconnectAll);
+  $('clearlog').addEventListener('click', () => $('log').textContent='Ожидание…');
+})();
+</script>
+</body>
+</html>
