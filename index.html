@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111214">
+  <title>Xiaomi Scooter 6 — P-256 Probe v0.6</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    body { margin:0; background:#111214; color:#f5f5f7; }
+    main { max-width:760px; margin:0 auto; padding:28px 18px 48px; }
+    .card { background:#1b1c20; border:1px solid #303138; border-radius:20px; padding:18px; margin:14px 0; }
+    .warning { border-color:#6d5320; background:#221c12; }
+    h1 { font-size:28px; margin:0 0 8px; }
+    p { color:#b8bbc3; line-height:1.45; }
+    button {
+      width:100%; min-height:52px; border:0; border-radius:14px;
+      font-size:17px; font-weight:700; margin-top:10px;
+    }
+    #run { background:#f2f2f2; color:#111; }
+    #disconnect, #clearlog { background:#2a2b31; color:#fff; }
+    .k { color:#9da0a8; font-size:13px; text-transform:uppercase; letter-spacing:.08em; margin-top:14px; }
+    .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; margin-top:6px; }
+    #status { font-weight:700; }
+    .ok { color:#6ee7a8; }
+    .warn { color:#ffd36e; }
+    .err { color:#ff8585; }
+    pre { white-space:pre-wrap; word-break:break-word; font-size:13px; color:#d5d7dd; margin:0; }
+    .pill {
+      display:inline-block; padding:5px 9px; border-radius:999px; margin:3px 4px 3px 0;
+      background:#27282e; color:#d7d9df; font:12px ui-monospace,SFMono-Regular,Menlo,monospace;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Xiaomi Scooter 6 — P-256 Probe v0.6</h1>
+
+  <div class="card warning">
+    <b>Граница этой версии</b>
+    <p>
+      v0.6 проходит transport bootstrap и выполняет только обмен временными P-256 public keys.
+      После получения public key самоката отправляется лишь ACK получения и тестируется локальный ECDH.
+    </p>
+    <p>
+      <b>LTMK не нужен и не используется.</b> Confirmation packet type 5 не отправляется,
+      AUTH OK не запрашивается, MiOT/настройки/DFU не трогаются.
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="k">Статус</div>
+    <div id="status">Готов</div>
+    <button id="run">Connect & Run P-256 Probe</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <button id="clearlog">Clear log</button>
+  </div>
+
+  <div class="card">
+    <div class="k">Устройство</div>
+    <div id="device" class="v">—</div>
+
+    <div class="k">0004</div>
+    <div id="version" class="v">—</div>
+
+    <div class="k">Этапы</div>
+    <div>
+      <span id="s_boot" class="pill">bootstrap: —</span>
+      <span id="s_session" class="pill">sessionStart: —</span>
+      <span id="s_keygen" class="pill">P-256 local: —</span>
+      <span id="s_flow" class="pill">key flow-control: —</span>
+      <span id="s_ctrlack" class="pill">control ACK: —</span>
+      <span id="s_keytx" class="pill">local key TX: —</span>
+      <span id="s_dataack" class="pill">data ACK: —</span>
+      <span id="s_peerrx" class="pill">peer key RX: —</span>
+      <span id="s_peerack" class="pill">peer key ACK: —</span>
+      <span id="s_ecdh" class="pill">ECDH validate: —</span>
+    </div>
+
+    <div class="k">Наш public key X||Y (64 байта)</div>
+    <div id="localKey" class="v">—</div>
+
+    <div class="k">Public key самоката X||Y (64 байта)</div>
+    <div id="peerKey" class="v">—</div>
+
+    <div class="k">SHA-256 fingerprint public key самоката</div>
+    <div id="peerFp" class="v">—</div>
+
+    <div class="k">Последний 0010</div>
+    <div id="last10" class="v">—</div>
+
+    <div class="k">Последний 0016</div>
+    <div id="last16" class="v">—</div>
+  </div>
+
+  <div class="card">
+    <div class="k">Лог</div>
+    <pre id="log">Ожидание…</pre>
+  </div>
+</main>
+
+<script>
+(() => {
+  const SERVICE = '0000fe95-0000-1000-8000-00805f9b34fb';
+  const UUID4   = '00000004-0000-1000-8000-00805f9b34fb';
+  const UUID10  = '00000010-0000-1000-8000-00805f9b34fb';
+  const UUID16  = '00000016-0000-1000-8000-00805f9b34fb';
+
+  const BOOTSTRAP_START = new Uint8Array([0xA4]);
+  const SESSION_START   = new Uint8Array([0x20, 0x00, 0x00, 0x00]);
+
+  // Xiaomi security-channel framing:
+  // flowControl(packetType=3, frameCount=1) -> 00 00 00 03 01 00
+  const PUBKEY_FLOW = new Uint8Array([0x00,0x00,0x00,0x03,0x01,0x00]);
+  // singleControlAcknowledgement(status=0) -> 00 00 03 00
+  const SINGLE_CONTROL_ACK = new Uint8Array([0x00,0x00,0x03,0x00]);
+
+  let device = null;
+  let server = null;
+  let service = null;
+  let ch10 = null;
+  let ch16 = null;
+
+  let subscribed10 = false;
+  let subscribed16 = false;
+  let bootstrapDone = false;
+  let sessionStartSent = false;
+
+  let keyPair = null;
+  let localPublic64 = null;
+  let peerPublic64 = null;
+
+  let authPhase = 'BOOTSTRAP';
+  let writeQueue = Promise.resolve();
+
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  function log(msg) {
+    const now = new Date().toLocaleTimeString();
+    const el = $('log');
+    if (el.textContent === 'Ожидание…') el.textContent = '';
+    el.textContent += `\n[${now}] ${msg}`;
+  }
+
+  function setStatus(msg, cls='') {
+    $('status').textContent = msg;
+    $('status').className = cls;
+  }
+
+  function mark(id, text, cls='ok') {
+    const el = $(id);
+    el.textContent = text;
+    el.className = `pill ${cls}`;
+  }
+
+  function toHex(bytes) {
+    return [...bytes].map(b => b.toString(16).padStart(2,'0')).join(' ').toUpperCase();
+  }
+
+  function getU16LE(bytes, offset=0) {
+    return bytes[offset] | (bytes[offset+1] << 8);
+  }
+
+  async function sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return toHex(new Uint8Array(digest));
+  }
+
+  async function writeNoResponse(ch, bytes, label) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    log(`TX ${label}: ${toHex(data)}`);
+
+    if (typeof ch.writeValueWithoutResponse === 'function') {
+      await ch.writeValueWithoutResponse(data);
+      return;
+    }
+    if (typeof ch.writeValue === 'function') {
+      await ch.writeValue(data);
+      return;
+    }
+    throw new Error(`Нет API для BLE write (${label})`);
+  }
+
+  function queueWrite(task) {
+    writeQueue = writeQueue.then(task).catch(err => {
+      setStatus('Ошибка записи', 'err');
+      log(`WRITE ERROR: ${err.name || 'Error'}: ${err.message || err}`);
+    });
+    return writeQueue;
+  }
+
+  async function generateEphemeralKey() {
+    if (!crypto?.subtle) throw new Error('WebCrypto crypto.subtle недоступен');
+
+    keyPair = await crypto.subtle.generateKey(
+      { name:'ECDH', namedCurve:'P-256' },
+      true,
+      ['deriveBits']
+    );
+
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+    if (raw.length !== 65 || raw[0] !== 0x04) {
+      throw new Error(`Неожиданный P-256 raw public key (${raw.length} bytes)`);
+    }
+
+    localPublic64 = raw.slice(1);
+    $('localKey').textContent = toHex(localPublic64);
+    mark('s_keygen', 'P-256 local: OK');
+    log(`Local P-256 public key generated: ${toHex(localPublic64)}`);
+  }
+
+  async function importPeerKey(peer64) {
+    if (peer64.length !== 64) throw new Error('Peer public key must be 64 bytes');
+    const sec1 = new Uint8Array(65);
+    sec1[0] = 0x04;
+    sec1.set(peer64, 1);
+
+    return await crypto.subtle.importKey(
+      'raw',
+      sec1,
+      { name:'ECDH', namedCurve:'P-256' },
+      true,
+      []
+    );
+  }
+
+  async function validatePeerKeyAndEcdh(peer64) {
+    const peerKey = await importPeerKey(peer64);
+    const sharedBits = await crypto.subtle.deriveBits(
+      { name:'ECDH', public:peerKey },
+      keyPair.privateKey,
+      256
+    );
+
+    const shared = new Uint8Array(sharedBits);
+    if (shared.length !== 32) throw new Error(`ECDH secret length ${shared.length}, expected 32`);
+
+    // Shared secret deliberately is NOT displayed or logged.
+    mark('s_ecdh', 'ECDH validate: 32B OK');
+    log('ECDH P-256 deriveBits succeeded (32 bytes). Shared secret intentionally not displayed.');
+  }
+
+  async function subscribe16() {
+    if (subscribed16) return;
+    ch16.addEventListener('characteristicvaluechanged', on16);
+    await ch16.startNotifications();
+    subscribed16 = true;
+    log('0016 NOTIFY enabled');
+  }
+
+  async function subscribe10() {
+    if (subscribed10) return;
+    ch10.addEventListener('characteristicvaluechanged', on10);
+    await ch10.startNotifications();
+    subscribed10 = true;
+    log('0010 NOTIFY enabled');
+  }
+
+  function isA4Envelope(bytes) {
+    return bytes.length >= 4 &&
+      bytes[0] === 0x00 &&
+      bytes[1] === 0x00 &&
+      bytes[2] === 0x04;
+  }
+
+  async function handleA4(bytes) {
+    const stage = bytes[3];
+    log(`A4 envelope stage=${stage}, len=${bytes.length}`);
+
+    const ack = new Uint8Array(bytes);
+    ack[2] = 0x05;
+
+    await sleep(100);
+    await writeNoResponse(ch16, ack, `0016 A5 stage ${stage}`);
+
+    if (stage === 1 && !bootstrapDone) {
+      bootstrapDone = true;
+      mark('s_boot', 'bootstrap: OK');
+
+      await sleep(100);
+      await subscribe10();
+
+      await sleep(100);
+      await writeNoResponse(ch10, SESSION_START, '0010 sessionStart');
+      sessionStartSent = true;
+      mark('s_session', 'sessionStart: TX');
+
+      await sleep(150);
+      await generateEphemeralKey();
+
+      await sleep(100);
+      authPhase = 'WAIT_CTRL_ACK';
+      await writeNoResponse(ch16, PUBKEY_FLOW, '0016 publicKey flowControl type=3 count=1');
+      mark('s_flow', 'key flow-control: TX');
+      setStatus('Ждём ACK на public-key flow-control…', 'warn');
+    }
+  }
+
+  async function handleSecurityFrame(bytes) {
+    if (bytes.length < 2) {
+      log('0016 security frame too short');
+      return;
+    }
+
+    const sequence = getU16LE(bytes, 0);
+
+    // Data fragment from peer: not expected for public-key response in this stage.
+    if (sequence !== 0) {
+      log(`0016 DATA fragment seq=${sequence}, len=${bytes.length - 2}: ${toHex(bytes)}`);
+      return;
+    }
+
+    if (bytes.length < 4) {
+      log(`0016 control frame too short: ${toHex(bytes)}`);
+      return;
+    }
+
+    const kind = bytes[2];
+    const typeOrStatus = bytes[3];
+
+    // kind 1 = ACK
+    if (kind === 0x01) {
+      const signedStatus = typeOrStatus > 127 ? typeOrStatus - 256 : typeOrStatus;
+      log(`0016 ACK status=${signedStatus}: ${toHex(bytes)}`);
+
+      if (authPhase === 'WAIT_CTRL_ACK') {
+        if (signedStatus !== 1) {
+          throw new Error(`Public-key control ACK expected status=1, got ${signedStatus}`);
+        }
+
+        mark('s_ctrlack', 'control ACK: 1 OK');
+        authPhase = 'WAIT_DATA_ACK';
+
+        const frame = new Uint8Array(66);
+        frame[0] = 0x01; // sequence=1 little endian
+        frame[1] = 0x00;
+        frame.set(localPublic64, 2);
+
+        await sleep(100);
+        await writeNoResponse(ch16, frame, '0016 local public key seq=1 (64B)');
+        mark('s_keytx', 'local key TX: 64B');
+
+        setStatus('Наш public key отправлен, ждём data ACK…', 'warn');
+        return;
+      }
+
+      if (authPhase === 'WAIT_DATA_ACK') {
+        if (signedStatus !== 0) {
+          throw new Error(`Public-key data ACK expected status=0, got ${signedStatus}`);
+        }
+
+        mark('s_dataack', 'data ACK: 0 OK');
+        authPhase = 'WAIT_PEER_KEY';
+        setStatus('Ждём public key самоката…', 'warn');
+        return;
+      }
+
+      log(`ACK получен вне ожидаемой фазы ${authPhase}; только лог.`);
+      return;
+    }
+
+    // kind 2 = SingleControl. packetType 3 is peer public key.
+    if (kind === 0x02 && typeOrStatus === 0x03) {
+      const payload = bytes.slice(4);
+      log(`0016 SingleControl packetType=3, payload=${payload.length} bytes`);
+
+      if (authPhase !== 'WAIT_PEER_KEY') {
+        log(`Peer-key frame получен вне ожидаемой фазы ${authPhase}; анализируем без продолжения.`);
+      }
+
+      if (payload.length !== 64) {
+        throw new Error(`Peer public key expected 64 bytes, got ${payload.length}`);
+      }
+
+      peerPublic64 = new Uint8Array(payload);
+      $('peerKey').textContent = toHex(peerPublic64);
+      $('peerFp').textContent = await sha256Hex(peerPublic64);
+      mark('s_peerrx', 'peer key RX: 64B OK');
+
+      await validatePeerKeyAndEcdh(peerPublic64);
+
+      // ACK peer SingleControl, but deliberately DO NOT start confirmation packet type 5.
+      await sleep(100);
+      await writeNoResponse(ch16, SINGLE_CONTROL_ACK, '0016 peer single-control ACK');
+      mark('s_peerack', 'peer key ACK: TX');
+
+      authPhase = 'STOPPED_BEFORE_LTMK';
+      setStatus('P-256 EXCHANGE OK — остановлено до LTMK confirmation', 'ok');
+      log('STOP: peer public key accepted. Confirmation packet type 5 intentionally NOT sent. LTMK not used.');
+      return;
+    }
+
+    log(`0016 other control kind=${kind}, type/status=${typeOrStatus}: ${toHex(bytes)}`);
+  }
+
+  function on16(event) {
+    const dv = event.target.value;
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last16').textContent = toHex(bytes);
+
+    log(`RX 0016 len=${bytes.length}: ${toHex(bytes)}`);
+
+    const copy = new Uint8Array(bytes);
+    queueWrite(async () => {
+      if (isA4Envelope(copy) && !bootstrapDone) {
+        await handleA4(copy);
+      } else {
+        await handleSecurityFrame(copy);
+      }
+    });
+  }
+
+  function on10(event) {
+    const dv = event.target.value;
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    $('last10').textContent = toHex(bytes);
+    log(`RX 0010: ${toHex(bytes)}`);
+
+    if (bytes.length === 4 &&
+        bytes[0] === 0x21 && bytes[1] === 0 &&
+        bytes[2] === 0 && bytes[3] === 0) {
+      log('0010 = 21 00 00 00 observed, but v0.6 still does NOT claim AUTH OK because LTMK confirmation was not performed.');
+    }
+  }
+
+  async function read0004() {
+    const ch4 = await service.getCharacteristic(UUID4);
+    const dv = await ch4.readValue();
+    const bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    const ascii = new TextDecoder().decode(bytes).replace(/\0/g, '');
+    $('version').textContent = `${ascii} | ${toHex(bytes)}`;
+    log(`0004 READ: ${toHex(bytes)} | ${ascii}`);
+  }
+
+  async function disconnectAll() {
+    try { if (ch16 && subscribed16) await ch16.stopNotifications(); } catch (_) {}
+    try { if (ch10 && subscribed10) await ch10.stopNotifications(); } catch (_) {}
+    try { ch16?.removeEventListener('characteristicvaluechanged', on16); } catch (_) {}
+    try { ch10?.removeEventListener('characteristicvaluechanged', on10); } catch (_) {}
+
+    subscribed10 = false;
+    subscribed16 = false;
+    bootstrapDone = false;
+    sessionStartSent = false;
+    authPhase = 'BOOTSTRAP';
+    keyPair = null;
+    localPublic64 = null;
+    peerPublic64 = null;
+    writeQueue = Promise.resolve();
+
+    try { if (device?.gatt?.connected) device.gatt.disconnect(); } catch (_) {}
+  }
+
+  function onDisconnected() {
+    setStatus('Отключено');
+    $('disconnect').disabled = true;
+    $('run').disabled = false;
+    log('GATT отключён');
+  }
+
+  $('run').addEventListener('click', async () => {
+    if (!navigator.bluetooth) {
+      setStatus('Web Bluetooth недоступен', 'err');
+      log('navigator.bluetooth отсутствует. Открой страницу именно в Bluefy.');
+      return;
+    }
+    if (!crypto?.subtle) {
+      setStatus('WebCrypto недоступен', 'err');
+      log('crypto.subtle отсутствует — P-256 probe невозможен в этом браузере.');
+      return;
+    }
+
+    try {
+      await disconnectAll();
+
+      // reset UI
+      for (const id of ['s_boot','s_session','s_keygen','s_flow','s_ctrlack','s_keytx','s_dataack','s_peerrx','s_peerack','s_ecdh']) {
+        $(id).className = 'pill';
+      }
+      $('localKey').textContent = '—';
+      $('peerKey').textContent = '—';
+      $('peerFp').textContent = '—';
+      $('last10').textContent = '—';
+      $('last16').textContent = '—';
+
+      setStatus('Выбор устройства…', 'warn');
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [SERVICE]
+      });
+
+      $('device').textContent = device.name || '(без имени)';
+      log(`Выбрано: ${device.name || '(без имени)'}`);
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+
+      setStatus('GATT connect…', 'warn');
+      server = await device.gatt.connect();
+      log('GATT подключён');
+
+      service = await server.getPrimaryService(SERVICE);
+      log('FE95 найден');
+
+      ch10 = await service.getCharacteristic(UUID10);
+      ch16 = await service.getCharacteristic(UUID16);
+      log('0010 и 0016 найдены');
+
+      await subscribe16();
+      await read0004();
+
+      await sleep(100);
+      await writeNoResponse(ch10, BOOTSTRAP_START, '0010 bootstrapStart A4');
+
+      setStatus('Bootstrap: ждём A4 stages…', 'warn');
+      $('disconnect').disabled = false;
+      $('run').disabled = true;
+
+    } catch (e) {
+      setStatus('Ошибка', 'err');
+      log(`${e.name || 'Error'}: ${e.message || e}`);
+    }
+  });
+
+  $('disconnect').addEventListener('click', disconnectAll);
+
+  $('clearlog').addEventListener('click', () => {
+    $('log').textContent = 'Ожидание…';
+  });
+})();
+</script>
+</body>
+</html>
